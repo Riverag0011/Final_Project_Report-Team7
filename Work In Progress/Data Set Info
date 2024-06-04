@@ -1,1 +1,32 @@
 
+A smoke detector is a device that senses smoke, typically as an indicator of fire. Smoke detectors are usually housed in plastic enclosures, 
+typically shaped like a disk about 150 millimetres (6 in) in diameter and 25 millimetres (1 in) thick, but shape and size vary.
+
+Smoke detectors save a lot of lives. For example, the number of fire victims fell by more than 48% in France from 1982 to 2012 and 56% in the 
+UK from 1982 to 2013. These reductions can largely be linked to increased fire safety regulations and smoke detectors. In the U.S. 96% of all 
+homes have smoke alarms and approximately 20% of homes with smoke alarms have non-operational smoke alarms. It is estimated that if every home 
+had working smoke alarms, U.S. residential fire deaths could drop by 36%, with nearly 1100 lives saved per year. With an increasing number of 
+smoke detectors, false alarms became a problem. The number of false fire alarms is increasing continuously, which is a severe issue for 
+firefighters.
+
+Your task is to devise a Machine Learning model that helps us detect smoke with the help of IoT data and trigger a fire alarm, 
+thereby preventing any mishap.
+
+The collection of training data is performed with the help of IOT devices since the goal is to develop an 
+AI-based smoke detector device.
+
+
+The dataset features in detail:
+Air Temperature
+Air Humidity
+TVOC: Total Volatile Organic Compounds; measured in parts per billion (Source)
+eCO2: co2 equivalent concentration; calculated from different values like TVCO
+Raw H2: raw molecular hydrogen; not compensated (Bias, temperature, etc.)
+Raw Ethanol: raw ethanol gas (Source)
+Air Pressure
+PM 1.0 and PM 2.5: particulate matter size < 1.0 µm (PM1.0). 1.0 µm < 2.5 µm (PM2.5)
+Fire Alarm: ground truth is "1" if a fire is there
+CNT: Sample counter
+UTC: Timestamp UTC seconds
+NC0.5/NC1.0 and NC2.5: Number concentration of particulate matter. This differs from PM because NC gives the actual number of particles in the air. 
+                        The raw NC is also classified by the particle size: < 0.5 µm (NC0.5); 0.5 µm < 1.0 µm (NC1.0); 1.0 µm < 2.5 µm (NC2.5);
