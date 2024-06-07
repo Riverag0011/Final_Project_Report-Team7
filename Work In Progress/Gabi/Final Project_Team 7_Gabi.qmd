@@ -1,0 +1,300 @@
+---
+title: "Final Project_Team 7_Gabi"
+author: "Gabi Rivera"
+format: pdf
+editor: visual
+---
+
+# **Sensor-Fusion Smoke Detection Classification**
+
+The goal is to devise a Machine Learning model that that will detect smoke through the use of loT data to trigger a fire alarm.
+
+**Information about the Features:**
+
+*Air Temperature*\
+*Air Humidity*\
+*TVOC:* Total Volatile Organic Compounds; measured in parts per billion (Source)\
+*eCO2:* co2 equivalent concentration; calculated from different values like TVCO\
+*Raw H2:* raw molecular hydrogen; not compensated (Bias, temperature, etc.)\
+*Raw Ethanol:* raw ethanol gas (Source)\
+*Air Pressure*\
+*PM 1.0 and PM 2.5:* particulate matter size \< 1.0 µm (PM1.0). 1.0 µm \< 2.5 µm (PM2.5)\
+*Fire Alarm:* ground truth is "1" if a fire is there\
+*CNT:* Sample counter\
+*UTC:* Timestamp UTC seconds\
+*NC0.5/NC1.0 and NC2.5:* Number concentration of particulate matter. This differs from PM because NC gives the actual number of particles in the air. The raw NC is also classified by the particle size: \< 0.5 µm (NC0.5); 0.5 µm \< 1.0 µm (NC1.0); 1.0 µm \< 2.5 µm (NC2.5);
+
+## Pre-Processing:
+
+```{r warning=FALSE, message=FALSE}
+# List of libraries
+library(caret)
+library(tidyverse)
+library(naniar)
+library(gt)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(GGally)
+library(corrplot)
+library(e1071)
+library(tibble)
+library(MASS)
+library(mice)
+library(reshape2)
+```
+
+Note:
+
+-   Train dataset has 5000 observations, 14 predictors, and an outcome variable.
+-   Test dataset has 12437 observations and 14 predictors.
+
+```{r dataset}
+# Upload datasets
+train <- read.csv("train_dataset.csv")
+test <- read.csv("test_dataset.csv")
+
+# Use train_dataset moving forward
+smokedf <- train 
+str(smokedf)
+class(smokedf)
+```
+
+```{r missing}
+# Missing Values
+smokedf[smokedf == ""] <- NA
+na_value <- sapply(smokedf, function(x) sum(is.na(x)))
+predictors_with_missing <- names(na_value[na_value > 0])
+
+missing_values_table <- data.frame(Predictor = predictors_with_missing,
+Missing_Values = na_value[predictors_with_missing])
+missing_values_table |> head() |> gt() |>
+  tab_header(title = "Predictors with Missing Values")
+
+vis_miss(smokedf)
+```
+
+```{r histogram}
+# Histogram of each predictors
+smokedf |>
+  pivot_longer(-Fire.Alarm, names_to = 'Element', values_to = 'value') |>
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~Element, scales = 'free', ncol = 4) +  
+  theme_bw() +
+  labs(title = 'Predictors Distribution', x = NULL, y = "Count")
+```
+
+```{r box plot I}
+# Create box plots for each predictors:
+smokedf |>
+  pivot_longer(-Fire.Alarm, names_to = 'Element', values_to = 'value') |>
+  ggplot(aes(value)) +
+  geom_boxplot() +
+  facet_wrap(~Element, scales = "free", ncol = 4) +
+  theme_bw() +
+  labs(title = 'Box Plots of Predictors', x = "Count")
+```
+
+```{r box plot II}
+# Create box plots of response for each predictors:
+smokedf |>
+  pivot_longer(-Fire.Alarm, names_to = 'Element', values_to = 'value') |>
+  ggplot(aes(Fire.Alarm, value, group = Fire.Alarm)) +
+  geom_boxplot() +
+  facet_wrap(~Element, scales = "free", ncol = 4) +
+  theme_bw() +
+  labs(title = 'Box Plots of Predictors over Response', x = "Fire Alarm", y = "Count")
+```
+
+```{r correlation}
+# Correlation plot including outcome variable
+smokedf |>
+mutate(Fire.Alarm = as.numeric(Fire.Alarm)) |>
+cor() |>
+corrplot.mixed(title = "Correlation Plot Between Outcome and Predictors",
+tl.cex = .25, number.cex = 0.6, mar = c(1, 1, 1, 1))
+```
+
+```{r reduced}
+# Remove highly correlated predictors
+correlation_matrix <- cor(smokedf[, -1])
+highly_correlated <- findCorrelation(correlation_matrix, cutoff = 0.75)
+highly_correlated_names <- colnames(smokedf[, -1])[highly_correlated]
+smokedf_reduced <- smokedf[, -highly_correlated]
+
+# Correlation plot including outcome variable
+smokedf_reduced |>
+  mutate(Fire.Alarm = as.numeric(Fire.Alarm)) |>
+  cor() |>
+  corrplot.mixed(title = "Reduced Correlation Plot",
+                 tl.cex = .5, number.cex = 0.8, mar = c(1, 1, 1, 1))
+```
+
+```{r skew, warning=FALSE, message=FALSE}
+# Calculate skewness of each predictors
+# Skew values less than ±0.5 should be considered ‘normal enough’
+skew_fa <- smokedf_reduced |>
+  dplyr::select(-Fire.Alarm) |>
+  map_dbl(skewness) |> round(3) 
+
+skew_fa_tibble <- tibble(Variable = names(skew_fa), Skewness = skew_fa)
+skew_fa_tibble |> gt()
+
+# Determine zero values in the dataframe
+zero_counts <- sapply(smokedf, function(x) sum(x == 0, na.rm = TRUE))
+```
+
+```{r box cox}
+# Perform Box Cox Tranformation Analysis and determine predictors with >50% improvement
+bct_test <- function(x, property = 'skew') {
+  stopifnot(property %in% c('skew', 'lambda'))
+  
+  x <- x[which(! is.na(x))] 
+  x2 <- x + ifelse(any(x == 0), 0.0001, 0) 
+
+  bct <- BoxCoxTrans(x2)
+  x_trans <- predict(bct, x2 )
+if (property == 'skew') return(e1071::skewness(x_trans))
+return(bct$lambda)}
+
+skew_smfa_bct <- smokedf_reduced |>
+  dplyr::select(-Fire.Alarm) |>
+  map_dbl(bct_test)
+
+bct_analysis <- tibble(
+  Property = names(skew_fa),
+  `Original Skew` = skew_fa,
+  `Skew after BoxCox`= round(skew_smfa_bct,4),
+  Lambda = smokedf_reduced |> dplyr::select(-Fire.Alarm) |> 
+    map_dbl( ~ bct_test(.x, 'lambda')))
+
+bct_keep <- bct_analysis |>
+  filter(abs(`Original Skew`) > 0.5,
+         abs(`Skew after BoxCox`) < 0.5)
+
+bct_keep |>
+gt::gt()
+
+# Apply BCT Analysis result in reduced dataframe
+bct <- BoxCoxTrans(smokedf_reduced$CNT + 
+                     ifelse(any(smokedf_reduced$CNT == 0), 0.0001, 0))
+smokedf_reduced$gamma_CNT <- predict(bct, smokedf_reduced$CNT)
+
+# Plot Changes
+smokedf_reduced |> ggplot(aes(x = gamma_CNT)) +
+    geom_histogram(binwidth = 500, fill = "pink", color = "white") +
+    geom_histogram(aes(x = CNT), binwidth = 500, fill = "darkgray", alpha = 10) +
+    labs(title = "Histogram of Box-Cox Transformed gamma with 0")
+
+smokedf_reduced |>
+ggplot(aes(x = gamma_CNT)) +
+geom_histogram(bins= 9, color = "white", fill = "pink") +
+labs(title ="Histogram of Box-Cox Transformed gamma_CNT")
+
+# Remove Original CNT in reduced dataframe
+smokedf_reduced <- smokedf_reduced |> dplyr::select(-CNT) |> 
+  relocate("Fire.Alarm", .after = last_col())
+```
+
+## Exploratory Data Analysis
+
+```{r orginal , warning=FALSE, message=FALSE}
+# General relationship plot: Multivariate Analysis (Original Data)
+smokedf |>
+  dplyr::select(-Fire.Alarm) |>
+  ggpairs(title = 'Original: Predictors Relationship Map', progress = TRUE,
+          upper = list(continuous = wrap("cor", size = 2))) +
+  theme_grey(base_size = 5) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
+        axis.text.y = element_text(size = 5),
+        panel.spacing = unit(0.01, "lines"))
+```
+
+```{r reduced, warning=FALSE, message=FALSE}
+# General relationship plot: Multivariate Analysis (Reduced Data)
+smokedf_reduced$Fire.Alarm <- as.factor(smokedf_reduced$Fire.Alarm)
+
+smokedf_reduced |>
+  ggpairs(title = 'Reduced: Predictors Relationship Map', progress = TRUE,
+          upper = list(continuous = wrap("cor", size = 2.5)),
+          lower = list(continuous = wrap("points", alpha = 0.3), 
+                       combo = wrap("box_no_facet", alpha = 0.4)),
+          columns = 1:9, ggplot2::aes(colour = Fire.Alarm)) +
+  theme_grey(base_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
+        axis.text.y = element_text(size = 8),
+        panel.spacing = unit(0.1, "lines"))
+```
+
+```{r}
+# Explore proportion of Fire.Alarm classes against each predictors
+proportions <- smokedf_reduced |>
+  pivot_longer(-Fire.Alarm, names_to = 'variable', values_to = 'value') |>
+  group_by(Fire.Alarm, variable, value) |>
+  summarize(Count = n(), .groups = 'drop') |>
+  group_by(variable, Fire.Alarm) |>
+  mutate(Proportion = Count / sum(Count))
+
+# Create the bar plot
+proportions |>
+  ggplot(aes(x = Fire.Alarm, y = Proportion, fill = Fire.Alarm)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ variable, scales = "free_y", ncol = 4) +
+  labs(x = "Fire.Alarm", y = "Proportion") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5))
+```
+
+```{r}
+# Explore the the value range of Fire.Alarm classes against each predictors
+smokedf_reduced |>
+  pivot_longer(-Fire.Alarm, names_to = 'variable', values_to = 'value') |>
+  ggplot(aes(x = Fire.Alarm, y = value, fill = Fire.Alarm)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  facet_wrap(~ variable, scales = "free_y", ncol = 4) +
+  labs(x = "Fire.Alarm", y = "Range of Value") +
+  theme_minimal()
+```
+
+## Training and Test Sets
+
+```{r tt}
+set.seed(123)
+smokedf_predictors <- smokedf_reduced[ ,-1]
+smokedf_yield <- smokedf_reduced[ ,1]
+
+# Split the data into training and test sets
+smokedf_index <- createDataPartition(smokedf_yield, p = 0.8, list = FALSE)
+smokedf_train <- smokedf_predictors[smokedf_index, ]
+smokedf_test <- smokedf_predictors[-smokedf_index, ]
+
+yield_train <- smokedf_yield[smokedf_index ]
+yield_test <- smokedf_yield[-smokedf_index ]
+```
+
+```{r}
+# Center and scaling using preProcess
+smokedf_prep <- preProcess(smokedf_train, method = c("center", "scale"))
+
+# Apply the transformation to the training data
+smokedf_train_transformed <- predict(smokedf_prep, smokedf_train)
+smokedf_test_transformed <- predict(smokedf_prep, smokedf_test)
+```
+
+## Model Strategies
+
+```{r}
+
+```
+
+## Validation and Testing
+
+```{r}
+
+```
+
+## Performance Evaluation
+
+```{r}
+
+```
