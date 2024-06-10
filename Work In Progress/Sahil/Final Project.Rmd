@@ -1,0 +1,86 @@
+---
+title: "Final Project (Team 7)"
+author: "Sahil Wadhwa"
+---
+
+```{r}
+#Packages Used
+
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(e1071)
+library(corrplot)
+library(tibble)
+library(lubridate)
+```
+
+```{r}
+#Loading Datasets (Train and Test)
+
+smoke_main <- read.csv("train_dataset.csv")
+smoke_minor <- read.csv("test_dataset.csv")
+
+#Train: 12347 observations, 14 variables
+#Test: 5000 observations, 15 variables
+```
+
+```{r}
+#Finding missing values
+
+na_values <- sapply(smoke_main, function(x) sum(is.na(x)))
+na_values
+
+#There are no missing values thatg we need to work on
+```
+
+
+
+```{r}
+#EDA
+
+#Histogram for every predictor
+smoke_main |>
+  pivot_longer(-Fire.Alarm, names_to = 'UTC') |>
+  ggplot(aes(x = value)) + geom_histogram(bins = 15) + 
+  facet_wrap(~UTC, scales = 'free') + 
+  labs(title = 'Predictors Histograms')
+```
+```{r}
+#Correlation before removing anything
+
+#Corrplot between variables 
+corr <- cor(smoke_main)
+corrplot(corr, method = 'color', order = 'alphabet')
+```
+```{r}
+#Removing highly correlated predictors and updated corrplot
+
+corr_matrix <- cor(smoke_main[, -1])
+high_correlation_index <- findCorrelation(corr_matrix, cutoff = 0.7)
+smoke_updated_main <- smoke_main[, -high_correlation_index]
+
+corr <- cor(smoke_updated_main)
+corrplot(corr, method = 'color', order = 'alphabet')
+```
+
+```{r}
+#Splitting datasets (80-20 split). Only with the 8 remaining predictors
+
+set.seed(100)
+smoke_preds <- smoke_updated_main[ ,-1]
+smoke_yield <- smoke_updated_main[ , 1]
+
+index <- createDataPartition(smoke_yield, p = 0.8, list = FALSE, times = 1)
+
+train_smoke_ <- smoke_updated_main[index, ]
+test_smoke_ <- smoke_updated_main[-index, ]
+
+train_yield <- smoke_updated_main[index ]
+test_yield <- smoke_updated_main[-index ]
+```
+
+```{r}
+#Model 
+```
+
