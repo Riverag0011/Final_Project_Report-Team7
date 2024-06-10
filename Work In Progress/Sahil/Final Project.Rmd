@@ -31,11 +31,8 @@ smoke_minor <- read.csv("test_dataset.csv")
 na_values <- sapply(smoke_main, function(x) sum(is.na(x)))
 na_values
 
-#There are no missing values thatg we need to work on
+#There are no missing values that we need to work on
 ```
-
-
-
 ```{r}
 #EDA
 
