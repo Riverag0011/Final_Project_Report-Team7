@@ -42,6 +42,8 @@ library(tibble)
 library(MASS)
 library(mice)
 library(reshape2)
+library(ROSE)
+library(pROC)
 ```
 
 Note:
@@ -58,6 +60,7 @@ test <- read.csv("test_dataset.csv")
 smokedf <- train 
 str(smokedf)
 class(smokedf)
+#summary(smokedf)
 ```
 
 ```{r missing}
@@ -199,7 +202,7 @@ smokedf_reduced <- smokedf_reduced |> dplyr::select(-CNT) |>
 
 ## Exploratory Data Analysis
 
-```{r orginal , warning=FALSE, message=FALSE}
+```{r orginal, warning=FALSE, message=FALSE}
 # General relationship plot: Multivariate Analysis (Original Data)
 smokedf |>
   dplyr::select(-Fire.Alarm) |>
@@ -211,7 +214,7 @@ smokedf |>
         panel.spacing = unit(0.01, "lines"))
 ```
 
-```{r reduced, warning=FALSE, message=FALSE}
+```{r reduced data, warning=FALSE, message=FALSE}
 # General relationship plot: Multivariate Analysis (Reduced Data)
 smokedf_reduced$Fire.Alarm <- as.factor(smokedf_reduced$Fire.Alarm)
 
@@ -227,7 +230,7 @@ smokedf_reduced |>
         panel.spacing = unit(0.1, "lines"))
 ```
 
-```{r}
+```{r proportion}
 # Explore proportion of Fire.Alarm classes against each predictors
 proportions <- smokedf_reduced |>
   pivot_longer(-Fire.Alarm, names_to = 'variable', values_to = 'value') |>
@@ -245,7 +248,7 @@ proportions |>
   theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5))
 ```
 
-```{r}
+```{r range}
 # Explore the the value range of Fire.Alarm classes against each predictors
 smokedf_reduced |>
   pivot_longer(-Fire.Alarm, names_to = 'variable', values_to = 'value') |>
@@ -259,7 +262,8 @@ smokedf_reduced |>
 ## Training and Test Sets
 
 ```{r tt}
-set.seed(123)
+set.seed(503)
+smokedf_reduced$Fire.Alarm <- ifelse(smokedf_reduced$Fire.Alarm == 0, "No", "Yes")
 smokedf_predictors <- smokedf_reduced[ ,-1]
 smokedf_yield <- smokedf_reduced[ ,1]
 
@@ -267,34 +271,265 @@ smokedf_yield <- smokedf_reduced[ ,1]
 smokedf_index <- createDataPartition(smokedf_yield, p = 0.8, list = FALSE)
 smokedf_train <- smokedf_predictors[smokedf_index, ]
 smokedf_test <- smokedf_predictors[-smokedf_index, ]
-
-yield_train <- smokedf_yield[smokedf_index ]
-yield_test <- smokedf_yield[-smokedf_index ]
 ```
 
-```{r}
+```{r csb}
 # Center and scaling using preProcess
 smokedf_prep <- preProcess(smokedf_train, method = c("center", "scale"))
 
 # Apply the transformation to the training data
 smokedf_train_transformed <- predict(smokedf_prep, smokedf_train)
 smokedf_test_transformed <- predict(smokedf_prep, smokedf_test)
+
+# Rebalance train dataset
+cat("Number of non-triggered fire alarm (No) = ", 
+    sum(smokedf_train_transformed$Fire.Alarm == "No"), "\n") 
+cat("Number of triggered fire alarm (Yes) =", 
+    sum(smokedf_train_transformed$Fire.Alarm == "Yes"))
+
+train_balanced <- ROSE(Fire.Alarm ~ ., data = smokedf_train_transformed)$data
+
+rebalanced <- as.data.frame(table(train_balanced$Fire.Alarm)) 
+rebalanced |> gt() |> 
+  tab_header(title = "Rebalanced Fire Alarm Counts")
 ```
 
 ## Model Strategies
 
-```{r}
+```{r lr}
+set.seed(503)
+ctrl <- trainControl(method = "cv", summaryFunction = twoClassSummary, 
+                     classProbs = TRUE, savePredictions = TRUE)
 
+# Create Logistic Regression
+lrFit <- train(Fire.Alarm ~ ., 
+               data = train_balanced, 
+               method = "glm", 
+               metric = "ROC", 
+               trControl = ctrl)
+# Logistic regression final model using train data set
+lrFit$finalModel
+lrFit
+
+# Confusion matrix
+lrCM <- confusionMatrix(lrFit, norm = "none")
+lrCM
+
+# Logistic Regression ROC curve and AUC score
+lrRoc <- roc(response = lrFit$pred$obs,
+             predictor = lrFit$pred$Yes,
+             levels = rev(levels(lrFit$pred$obs)))
+auc_score_lr <- auc(lrRoc )
+
+plot(lrRoc, main = "Logistric Regression Train Model ROC Curve", 
+     col = "darkgreen", lwd = 2)
+abline(a = 0, b = 1, lty = 3, col = "darkgray")
+text(0.5, 0.3, paste0("AUC = ", round(auc_score_lr, 2)), adj = 2.6, col = "darkgreen")
+legend("bottomright", legend = c("LR ROC Curve", "Random"), 
+       col = c("darkgreen", "darkgray"), lty = c(1, 2), lwd = c(2, 1))
+
+# Variable importance
+lrImp <- varImp(lrFit, scale = FALSE)
+plot(lrImp, main = "Variable Importance (Logistic Regression)",
+     xlab = "Importance (Std.Dev. of Coefficients)", ylab = "Variables")
+```
+
+```{r gmb}
+# Create Penalized Logistic Regression
+glmnGrid <- expand.grid(alpha = seq(0, 1, by = 0.1),
+lambda = seq(.001, .3, length = 10))
+glmnFit <- train(Fire.Alarm ~ ., 
+                 data = train_balanced, 
+                 method = "glmnet",
+                 tuneGrid = glmnGrid,
+                 preProc = c("center", "scale"),
+                 metric = "ROC",
+                 trControl = ctrl)
+optimal_a <- glmnFit$bestTune$alpha
+optimal_l <- glmnFit$bestTune$lambda
+glmnmodel <- train(Fire.Alarm ~ .,
+                   data = train_balanced,
+                   method = "glmnet",
+                   preProc = c("center", "scale"),
+                   metric = "ROC",
+                   trControl = ctrl,
+                   tuneGrid = expand.grid(alpha = optimal_a,
+                                          lambda = optimal_l))
+
+glmnmodel
+
+# Confusion matrix
+glmnCM <- confusionMatrix(glmnmodel, norm = "none")
+glmnCM
+
+# Penalized Logistic Regression ROC curve and AUC score
+glmnRoc <- roc(response = glmnmodel$pred$obs,
+             predictor = glmnmodel$pred$Yes,
+             levels = rev(levels(glmnmodel$pred$obs)))
+auc_score_glmn <- auc(glmnRoc )
+
+plot(glmnRoc, main = "Penalized Logistric Regression Train Model ROC Curve", 
+     col = "pink", lwd = 2)
+abline(a = 0, b = 1, lty = 3, col = "darkgray")
+text(0.5, 0.3, paste0("AUC = ", round(auc_score_glmn, 2)), adj = 2.6, col = "pink")
+legend("bottomright", legend = c("GLMNet ROC Curve", "Random"), 
+       col = c("pink", "darkgray"), lty = c(1, 2), lwd = c(2, 1))
+                    
+# Variable importance
+glmnImp <- varImp(glmnmodel, scale = FALSE)
+plot(glmnImp, main = "Variable Importance (Penalized Logistic Regression)",
+     xlab = "Importance (Std.Dev. of Coefficients)", ylab = "Variables")
+```
+
+```{r nsc}
+# Create Nearest Shrunken Centroids
+nscGrid <- expand.grid(threshold = seq(0, 25, length = 30))
+nscFit <- train(Fire.Alarm ~ ., 
+                data = train_balanced,
+                method = "pam",
+                tuneGrid = nscGrid,
+                metric = "ROC",
+                trControl = ctrl)
+nscFit
+
+# Confusion matrix
+nscCM <- confusionMatrix(nscFit, norm = "none")
+nscCM
+
+# Nearest Shrunken Centroids ROC curve and AUC score
+nscRoc <- roc(response = nscFit$pred$obs,
+             predictor = nscFit$pred$Yes,
+             levels = rev(levels(nscFit$pred$obs)))
+auc_score_nsc <- auc(nscRoc)
+
+plot(nscRoc, main = "Nearest Shrunken Centroids Train Model ROC Curve", 
+     col = "darkblue", lwd = 2)
+abline(a = 0, b = 1, lty = 3, col = "darkgray")
+text(0.5, 0.3, paste0("AUC = ", round(auc_score_glmn, 2)), adj = 2.6, col = "darkblue")
+legend("bottomright", legend = c("NSC ROC Curve", "Random"), 
+       col = c("darkblue", "darkgray"), lty = c(1, 2), lwd = c(2, 1))
+                    
+# Variable importance
+nscImp <- varImp(nscFit, scale = FALSE)
+plot(nscImp, main = "Variable Importance (Nearest Shrunken Centroids Regression)",
+     xlab = "Importance (Std.Dev. of Coefficients)", ylab = "Variables")
 ```
 
 ## Validation and Testing
 
-```{r}
+```{r lrII}
+# Predict test data using logistic regression
+test_predictors <- smokedf_test_transformed[, -8]
+test_org <- data.frame(Fire.Alarm = smokedf_test_transformed$Fire.Alarm)
+test_org$Fire.Alarm <- factor(test_org$Fire.Alarm)
 
+lr_predictions <- predict(lrFit, newdata = test_predictors, type = "raw")
+lr_predictions <- data.frame(Fire.Alarm = lr_predictions)
+
+# Confusion Matrix
+lrCM_test <- confusionMatrix(data = as.factor(lr_predictions$Fire.Alarm), 
+                             reference = test_org$Fire.Alarm, positive = "Yes")
+lrCM_test
+```
+
+```{r glmnII}
+# Predict test data using penalized logistic regression
+glmn_predictions <- predict(glmnmodel, newdata = test_predictors, type = "raw")
+glmn_predictions <- data.frame(Fire.Alarm = glmn_predictions)
+
+# Confusion Matrix
+glmnCM_test <- confusionMatrix(data = as.factor(glmn_predictions$Fire.Alarm),
+                               reference = test_org$Fire.Alarm, positive = "Yes")
+glmnCM_test
+```
+
+```{r nscII}
+# Predict test data using nearest shrunken centroid
+nsc_predictions <- predict(nscFit, newdata = test_predictors, type = "raw")
+nsc_predictions <- data.frame(Fire.Alarm = nsc_predictions)
+
+# Confusion Matrix
+nscCM_test <- confusionMatrix(data = as.factor(nsc_predictions$Fire.Alarm),
+                               reference = test_org$Fire.Alarm, positive = "Yes")
+nscCM_test
 ```
 
 ## Performance Evaluation
 
-```{r}
+```{r lr glmnet}
+roc_test_lr <- roc(response = as.factor(test_org$Fire.Alarm),
+                 predictor = as.numeric(lr_predictions$Fire.Alarm))
+roc_test_glmn <- roc(response = as.factor(test_org$Fire.Alarm),
+                 predictor = as.numeric(glmn_predictions$Fire.Alarm))
+roc_test_nsc <- roc(response = as.factor(test_org$Fire.Alarm),
+                 predictor = as.numeric(nsc_predictions$Fire.Alarm))
 
+auc_test_lr <- auc(roc_test_lr)
+auc_test_glmn <- auc(roc_test_glmn)
+auc_test_nsc <- auc(roc_test_nsc)
+
+# Plot ROC curve
+plot(roc_test_lr, col = "darkgreen", main = "ROC Curves Comparison Using Test Data", lwd = 2)
+plot(roc_test_glmn, col = "pink", add = TRUE, lwd = 2)
+plot(roc_test_nsc, col = "darkblue", add = TRUE, lwd = 2)
+legend("bottomright", legend = c(paste("LR Model (AUC =", round(auc_test_lr, 2), ")"),
+                                 paste("GLMN Model (AUC =", round(auc_test_glmn, 2), ")"),
+                                 paste("NSC Model (AUC =", round(auc_test_nsc, 2), ")")),
+       col = c("darkgreen", "pink", "darkblue"), lwd = 2)
+
+```
+
+```{r compare}
+# Model's ROC score
+lrFit_ROC <- round(lrFit$results$ROC,3)
+glmnmodel_ROC <- round(glmnmodel$results$ROC,3)
+nscFit_ROC <- round(nscFit$results$ROC,3)
+
+# Confusion matrix train accuracy score
+lrCM_train_accuracy <- 0.898
+glmnCM_train_accuracy <- 0.899
+nscCM_train_accuracy <- 0.899
+
+# Confusion matrix test AUC score
+lrCM_AUC <- round(auc(roc_test_lr),3)
+glmnCM_AUC <- round(auc(roc_test_glmn),3)
+nscCM_AUC <- round(auc(roc_test_nsc),3)
+
+# Confusion matrix test accuracy score
+lrCM_test_accuracy <- lrCM_test$overall["Accuracy"]
+glmnCM_test_accuracy <- glmnCM_test$overall["Accuracy"]
+nscCM_test_accuracy <- nscCM_test$overall["Accuracy"]
+
+# Confusion matric test class balanced accuracy score
+lrCM_test_bal_accuracy <- round(lrCM_test$byClass["Balanced Accuracy"],3)
+glmnCM_test_bal_accuracy <- round(glmnCM_test$byClass["Balanced Accuracy"],3)
+nscCM_test_bal_accuracy <- round(nscCM_test$byClass["Balanced Accuracy"],3)
+
+# Adjust nscFit_ROC
+nscFit_ROC_adjusted <- nscFit_ROC[1]
+
+# Now, create the data frame with adjusted nscFit_ROC
+results_table <- data.frame(
+  Model = c("LR", "Penalized LR", 
+            "NSC"),
+  ROC_Score = c(lrFit_ROC, glmnmodel_ROC, nscFit_ROC_adjusted),
+  Train_Accuracy = c(lrCM_train_accuracy, glmnCM_train_accuracy, 
+                     nscCM_train_accuracy),
+  Test_AUC = c(lrCM_AUC, glmnCM_AUC, nscCM_AUC),
+  Test_Accuracy = c(lrCM_test_accuracy, glmnCM_test_accuracy, 
+                    nscCM_test_accuracy),
+  Test_Balanced_Accuracy = c(lrCM_test_bal_accuracy, 
+                             glmnCM_test_bal_accuracy, 
+                             nscCM_test_bal_accuracy))
+
+# Create a gt table
+results_table |> gt() |>
+  tab_header(title = "Model Comparison",
+             subtitle = "Comparison of performance metrics for different models") |>
+  cols_label(Model = "Model",
+             ROC_Score = "Model ROC",
+             Train_Accuracy = "Train Accuracy",
+             Test_AUC = "Test AUC",
+             Test_Accuracy = "Test Accuracy",
+             Test_Balanced_Accuracy = "Test Balanced Accuracy")
 ```
