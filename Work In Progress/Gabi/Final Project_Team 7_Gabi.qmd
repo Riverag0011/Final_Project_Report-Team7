@@ -44,6 +44,7 @@ library(mice)
 library(reshape2)
 library(ROSE)
 library(pROC)
+library(lubridate)
 ```
 
 Note:
@@ -84,7 +85,7 @@ smokedf |>
   ggplot(aes(x = value)) +
   geom_histogram(bins = 20) +
   facet_wrap(~Element, scales = 'free', ncol = 4) +  
-  theme_bw() +
+  theme(axis.text.x = element_text(angle = 10)) +
   labs(title = 'Predictors Distribution', x = NULL, y = "Count")
 ```
 
@@ -95,7 +96,7 @@ smokedf |>
   ggplot(aes(value)) +
   geom_boxplot() +
   facet_wrap(~Element, scales = "free", ncol = 4) +
-  theme_bw() +
+  theme(axis.text.x = element_text(angle = 10)) +
   labs(title = 'Box Plots of Predictors', x = "Count")
 ```
 
@@ -106,8 +107,22 @@ smokedf |>
   ggplot(aes(Fire.Alarm, value, group = Fire.Alarm)) +
   geom_boxplot() +
   facet_wrap(~Element, scales = "free", ncol = 4) +
-  theme_bw() +
+  theme(axis.text.x = element_text(angle = 0)) +
   labs(title = 'Box Plots of Predictors over Response', x = "Fire Alarm", y = "Count")
+```
+
+```{r UTC}
+# Convert UTC format into hours of day and day of week
+smokedf$UTC_datetime <- as.POSIXct(smokedf$UTC, origin = "1970-01-01", tz = "UTC")
+# all from 2022 and June
+
+smokedf$hour <- hour(smokedf$UTC_datetime)
+smokedf$day <- wday(smokedf$UTC_datetime, week_start = 1)
+
+# Reorder variables and remove UTC_datetime
+other_columns <- setdiff(names(smokedf), "Fire.Alarm")
+smokedf <- smokedf[, c(other_columns, "Fire.Alarm")]
+smokedf <- subset(smokedf, select = c(-UTC_datetime, -UTC))
 ```
 
 ```{r correlation}
@@ -127,7 +142,7 @@ highly_correlated_names <- colnames(smokedf[, -1])[highly_correlated]
 smokedf_reduced <- smokedf[, -highly_correlated]
 
 # Correlation plot including outcome variable
-smokedf_reduced |>
+smokedf_reduced |> 
   mutate(Fire.Alarm = as.numeric(Fire.Alarm)) |>
   cor() |>
   corrplot.mixed(title = "Reduced Correlation Plot",
@@ -259,6 +274,32 @@ smokedf_reduced |>
   theme_minimal()
 ```
 
+```{r hours}
+# Prevelent hour of the day
+smokedf$Fire.Alarm1 <- factor(smokedf$Fire.Alarm, levels = c(0, 1), labels = c("No", "Yes"))
+
+smokedf|>
+  ggplot(aes(x = factor(hour), fill = Fire.Alarm1)) +
+  geom_bar(position = "stack") +
+  labs(title = 'Frequency of Fire Alarm Classes Per Hour', x = "Hour of Day", 
+       y = "Count", fill = "Fire Alarm") +
+  scale_x_discrete(labels = function(x) as.numeric(x)) +
+  scale_fill_manual(values = c("Yes" = "pink", "No" = "darkgray")) +  
+  theme_minimal()
+```
+
+```{r week}
+# Prevelent day of the week
+smokedf |>
+  ggplot(aes(x = factor(day), fill = Fire.Alarm1)) +
+  geom_bar(position = "stack") +
+  labs(title = 'Frequency of Fire Alarm Classes Per Day', x = "Day of Week", 
+       y = "Count", fill = "Fire Alarm") +
+  scale_x_discrete(labels = function(x) as.numeric(x)) +
+  scale_fill_manual(values = c("Yes" = "darkgreen", "No" = "darkgray")) +  
+  theme_minimal()
+```
+
 ## Training and Test Sets
 
 ```{r tt}
@@ -357,6 +398,7 @@ glmnmodel <- train(Fire.Alarm ~ .,
                                           lambda = optimal_l))
 
 glmnmodel
+plot(glmnFit)
 
 # Confusion matrix
 glmnCM <- confusionMatrix(glmnmodel, norm = "none")
@@ -391,6 +433,7 @@ nscFit <- train(Fire.Alarm ~ .,
                 metric = "ROC",
                 trControl = ctrl)
 nscFit
+plot(nscFit)
 
 # Confusion matrix
 nscCM <- confusionMatrix(nscFit, norm = "none")
@@ -486,9 +529,9 @@ glmnmodel_ROC <- round(glmnmodel$results$ROC,3)
 nscFit_ROC <- round(nscFit$results$ROC,3)
 
 # Confusion matrix train accuracy score
-lrCM_train_accuracy <- 0.898
-glmnCM_train_accuracy <- 0.899
-nscCM_train_accuracy <- 0.899
+lrCM_train_accuracy <- 0.924
+glmnCM_train_accuracy <- 0.926
+nscCM_train_accuracy <- 0.930
 
 # Confusion matrix test AUC score
 lrCM_AUC <- round(auc(roc_test_lr),3)
@@ -496,9 +539,9 @@ glmnCM_AUC <- round(auc(roc_test_glmn),3)
 nscCM_AUC <- round(auc(roc_test_nsc),3)
 
 # Confusion matrix test accuracy score
-lrCM_test_accuracy <- lrCM_test$overall["Accuracy"]
-glmnCM_test_accuracy <- glmnCM_test$overall["Accuracy"]
-nscCM_test_accuracy <- nscCM_test$overall["Accuracy"]
+lrCM_test_accuracy <- round(lrCM_test$overall["Accuracy"],3)
+glmnCM_test_accuracy <- round(glmnCM_test$overall["Accuracy"],3)
+nscCM_test_accuracy <- round(nscCM_test$overall["Accuracy"],3)
 
 # Confusion matric test class balanced accuracy score
 lrCM_test_bal_accuracy <- round(lrCM_test$byClass["Balanced Accuracy"],3)
