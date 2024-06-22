@@ -460,9 +460,25 @@ plot(nscImp, main = "Variable Importance (Nearest Shrunken Centroids Regression)
 
 ```{r KNN}
 
+set.seed(100)
+knnTune <- train(Fire.Alarm ~ ., data = train_balanced,
+                method = "knn",
+                preProc = c("center","scale"),
+                tuneGrid = data.frame(k = 1:20))
+
+knnTune
+plot(knnTune)
+
 ```
 
 ```{r MARS}
+
+set.seed(100)
+marsTune <- train(Fire.Alarm ~ ., data = train_balanced,
+                  method = "earth",
+                  tuneGrid = expand.grid(degree = 1, nprune = 2:38))
+marsTune
+plot(marsTune)
 
 ```
 
@@ -515,9 +531,31 @@ nscCM_test
 
 ```{r knn}
 
+#Predictors and Confusion Matrix for KNN
+
+test_predictors <- smokedf_test_transformed[, -8]
+test_org <- data.frame(Fire.Alarm = smokedf_test_transformed$Fire.Alarm)
+test_org$Fire.Alarm <- factor(test_org$Fire.Alarm)
+
+knn_predictions <- predict(knnTune, newdata = test_predictors, type = "raw")
+knn_predictions <- data.frame(Fire.Alarm = knn_predictions)
+
+cm_knn <- confusionMatrix(data = as.factor(knn_predictions$Fire.Alarm),
+                               reference = test_org$Fire.Alarm, positive = "Yes")
+cm_knn
+
 ```
 
 ```{r mars}
+
+#Predictors and Confusion Matrix for Mars
+
+mars_predictions <- predict(marsTune, newdata = test_predictors, type = "raw")
+mars_predictions <- data.frame(Fire.Alarm = mars_predictions)
+
+cm_mars <- confusionMatrix(data = as.factor(mars_predictions$Fire.Alarm),
+                               reference = test_org$Fire.Alarm, positive = "Yes")
+cm_mars
 
 ```
 
@@ -617,7 +655,7 @@ results_table |> gt() |>
 
 ```{r mars}
 
-
+#Accuracy of 0.757
 
 ```
 
