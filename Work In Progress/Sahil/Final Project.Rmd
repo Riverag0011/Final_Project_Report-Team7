@@ -15,63 +15,181 @@ library(gt)
 ```
 
 ```{r}
-#Loading Datasets (Train and Test)
+# Upload datasets
+train <- read.csv("train_dataset.csv")
+test <- read.csv("test_dataset.csv")
 
-smoke_main <- read.csv("train_dataset.csv")
-smoke_minor <- read.csv("test_dataset.csv")
-
-#Train: 12347 observations, 14 variables
-#Test: 5000 observations, 15 variables
+# Use train_dataset moving forward
+smokedf <- train 
+str(smokedf)
+class(smokedf)
+#summary(smokedf)
 ```
 
 ```{r}
-#Finding missing values
+# Missing Values
+smokedf[smokedf == ""] <- NA
+na_value <- sapply(smokedf, function(x) sum(is.na(x)))
+predictors_with_missing <- names(na_value[na_value > 0])
 
-na_values <- sapply(smoke_main, function(x) sum(is.na(x)))
-na_values
+missing_values_table <- data.frame(Predictor = predictors_with_missing,
+Missing_Values = na_value[predictors_with_missing])
+missing_values_table |> head() |> gt() |>
+  tab_header(title = "Predictors with Missing Values")
 
-#There are no missing values that we need to work on
+vis_miss(smokedf)
 ```
 ```{r}
-#EDA
-
-#Histogram for every predictor
-smoke_main |>
-  pivot_longer(-Fire.Alarm, names_to = 'UTC') |>
-  ggplot(aes(x = value)) + geom_histogram(bins = 15) + 
-  facet_wrap(~UTC, scales = 'free') + 
-  labs(title = 'Predictors Histograms')
+# Histogram of each predictors
+smokedf |>
+  pivot_longer(-Fire.Alarm, names_to = 'Element', values_to = 'value') |>
+  ggplot(aes(x = value)) +
+  geom_histogram(bins = 20) +
+  facet_wrap(~Element, scales = 'free', ncol = 4) +  
+  theme(axis.text.x = element_text(angle = 10)) +
+  labs(title = 'Predictors Distribution', x = NULL, y = "Count")
 ```
 ```{r}
-#Correlation before removing anything
-
-#Corrplot between variables 
-corr <- cor(smoke_main)
-corrplot(corr, method = 'color', order = 'alphabet')
+#Create box plots for each predictors:
+smokedf |>
+  pivot_longer(-Fire.Alarm, names_to = 'Element', values_to = 'value') |>
+  ggplot(aes(value)) +
+  geom_boxplot() +
+  facet_wrap(~Element, scales = "free", ncol = 4) +
+  theme(axis.text.x = element_text(angle = 10)) +
+  labs(title = 'Box Plots of Predictors', x = "Count")
 ```
 ```{r}
-#Removing highly correlated predictors and updated corrplot
+# Create box plots of response for each predictors:
+smokedf |>
+  pivot_longer(-Fire.Alarm, names_to = 'Element', values_to = 'value') |>
+  ggplot(aes(Fire.Alarm, value, group = Fire.Alarm)) +
+  geom_boxplot() +
+  facet_wrap(~Element, scales = "free", ncol = 4) +
+  theme(axis.text.x = element_text(angle = 0)) +
+  labs(title = 'Box Plots of Predictors over Response', x = "Fire Alarm", y = "Count")
+```
 
-corr_matrix <- cor(smoke_main[, -1])
-high_correlation_index <- findCorrelation(corr_matrix, cutoff = 0.7)
-smoke_updated_main <- smoke_main[, -high_correlation_index]
 
-corr <- cor(smoke_updated_main)
-corrplot(corr, method = 'color', order = 'alphabet')
+```{r}
+# Convert UTC format into hours of day and day of week
+smokedf$UTC_datetime <- as.POSIXct(smokedf$UTC, origin = "1970-01-01", tz = "UTC")
+# all from 2022 and June
+
+smokedf$hour <- hour(smokedf$UTC_datetime)
+smokedf$day <- wday(smokedf$UTC_datetime, week_start = 1)
+
+# Reorder variables and remove UTC_datetime
+other_columns <- setdiff(names(smokedf), "Fire.Alarm")
+smokedf <- smokedf[, c(other_columns, "Fire.Alarm")]
+smokedf <- subset(smokedf, select = c(-UTC_datetime, -UTC))
 ```
 
 ```{r}
-#Splitting datasets (80-20 split). Only with the 8 remaining predictors
+# Correlation plot including outcome variable
+smokedf |>
+mutate(Fire.Alarm = as.numeric(Fire.Alarm)) |>
+cor() |>
+corrplot.mixed(title = "Correlation Plot Between Outcome and Predictors",
+tl.cex = .25, number.cex = 0.6, mar = c(1, 1, 1, 1))
+```
 
-set.seed(100)
-smokedf_predictors <- smoke_updated_main[ ,-1]
-smokedf_yield <- smoke_updated_main[ ,1]
+```{r}
+# Remove highly correlated predictors
+correlation_matrix <- cor(smokedf[, -1])
+highly_correlated <- findCorrelation(correlation_matrix, cutoff = 0.75)
+highly_correlated_names <- colnames(smokedf[, -1])[highly_correlated]
+smokedf_reduced <- smokedf[, -highly_correlated]
+
+# Correlation plot including outcome variable
+smokedf_reduced |> 
+  mutate(Fire.Alarm = as.numeric(Fire.Alarm)) |>
+  cor() |>
+  corrplot.mixed(title = "Reduced Correlation Plot",
+                 tl.cex = .5, number.cex = 0.8, mar = c(1, 1, 1, 1))
+```
+
+```{r}
+# Calculate skewness of each predictors
+# Skew values less than ±0.5 should be considered ‘normal enough’
+skew_fa <- smokedf_reduced |>
+  dplyr::select(-Fire.Alarm) |>
+  map_dbl(skewness) |> round(3) 
+
+skew_fa_tibble <- tibble(Variable = names(skew_fa), Skewness = skew_fa)
+skew_fa_tibble |> gt()
+
+# Determine zero values in the dataframe
+zero_counts <- sapply(smokedf, function(x) sum(x == 0, na.rm = TRUE))
+```
+
+```{r}
+# Perform Box Cox Tranformation Analysis and determine predictors with >50% improvement
+bct_test <- function(x, property = 'skew') {
+  stopifnot(property %in% c('skew', 'lambda'))
+  
+  x <- x[which(! is.na(x))] 
+  x2 <- x + ifelse(any(x == 0), 0.0001, 0) 
+
+  bct <- BoxCoxTrans(x2)
+  x_trans <- predict(bct, x2 )
+if (property == 'skew') return(e1071::skewness(x_trans))
+return(bct$lambda)}
+
+skew_smfa_bct <- smokedf_reduced |>
+  dplyr::select(-Fire.Alarm) |>
+  map_dbl(bct_test)
+
+bct_analysis <- tibble(
+  Property = names(skew_fa),
+  `Original Skew` = skew_fa,
+  `Skew after BoxCox`= round(skew_smfa_bct,4),
+  Lambda = smokedf_reduced |> dplyr::select(-Fire.Alarm) |> 
+    map_dbl( ~ bct_test(.x, 'lambda')))
+
+bct_keep <- bct_analysis |>
+  filter(abs(`Original Skew`) > 0.5,
+         abs(`Skew after BoxCox`) < 0.5)
+
+bct_keep |>
+gt::gt()
+
+# Apply BCT Analysis result in reduced dataframe
+bct <- BoxCoxTrans(smokedf_reduced$CNT + 
+                     ifelse(any(smokedf_reduced$CNT == 0), 0.0001, 0))
+smokedf_reduced$gamma_CNT <- predict(bct, smokedf_reduced$CNT)
+
+# Plot Changes
+smokedf_reduced |> ggplot(aes(x = gamma_CNT)) +
+    geom_histogram(binwidth = 500, fill = "pink", color = "white") +
+    geom_histogram(aes(x = CNT), binwidth = 500, fill = "darkgray", alpha = 10) +
+    labs(title = "Histogram of Box-Cox Transformed gamma with 0")
+
+smokedf_reduced |>
+ggplot(aes(x = gamma_CNT)) +
+geom_histogram(bins= 9, color = "white", fill = "pink") +
+labs(title ="Histogram of Box-Cox Transformed gamma_CNT")
+
+# Remove Original CNT in reduced dataframe
+smokedf_reduced <- smokedf_reduced |> dplyr::select(-CNT) |> 
+  relocate("Fire.Alarm", .after = last_col())
+```
+
+
+
+
+```{r}
+set.seed(503)
+smokedf_reduced$Fire.Alarm <- ifelse(smokedf_reduced$Fire.Alarm == 0, "No", "Yes")
+smokedf_predictors <- smokedf_reduced[ ,-1]
+smokedf_yield <- smokedf_reduced[ ,1]
 
 # Split the data into training and test sets
 smokedf_index <- createDataPartition(smokedf_yield, p = 0.8, list = FALSE)
 smokedf_train <- smokedf_predictors[smokedf_index, ]
 smokedf_test <- smokedf_predictors[-smokedf_index, ]
 
+# Center and scaling using preProcess
 smokedf_prep <- preProcess(smokedf_train, method = c("center", "scale"))
 
 # Apply the transformation to the training data
@@ -143,15 +261,13 @@ cm_mars
 #Performance Evaluation of KNN
 
 ```{r}
-#Most optimal value of K is 11
-#When k = 11, RMSE is 0.669
+#Accuracy of 0.835
 ```
 
 #Performance Evaluation of MARS
 
 ```{r}
-#Most optimal value of nprune is 13
-#When nprune = 13, RMSE = 0.761
+#Accuracy of 0.757
 ```
 
 
