@@ -611,9 +611,13 @@ results_table |> gt() |>
 
 ```{r knn}
 
+#Accuracy of 0.835
+
 ```
 
 ```{r mars}
+
+
 
 ```
 
