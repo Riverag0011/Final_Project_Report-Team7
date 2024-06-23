@@ -1,6 +1,6 @@
 ---
 title: "Final Project_Team 7_Gabi"
-author: "Gabi Rivera"
+author: "Gabi Rivera Liam Richardson Sahil Wadhwa"
 format: pdf
 editor: visual
 ---
@@ -466,11 +466,112 @@ plot(nscImp, main = "Variable Importance (Nearest Shrunken Centroids Regression)
 
 ```
 
-```{r}
+```{r SVM}
+
+```
+
+```{r NN}
+# X_test <- df <- subset(test_df, select = -c(UTC, CNT, Fire.Alarm))
+
+df <- read.csv("train_dataset.csv")  # Make sure to set the correct path
+y_failure_type <- factor(df$Fire.Alarm)
+# Remove unnecessary columns
+X <-  subset(df, select = -c(UTC, CNT, Fire.Alarm))
+
+if(any(!sapply(X, is.numeric))) {
+  X[] <- lapply(X, function(x) as.numeric(as.factor(x)))
+}
+
+# Standardize numeric features
+preProcValue <- preProcess(X,method = c("center", "scale"))
+X_processed <- predict(preProcValue, X)
+
+# Splitting the data into training and testing sets
+set.seed(42)
+trainIndex <- createDataPartition(y_failure_type, p = 0.7, list = FALSE)
+X_train <- X_processed[trainIndex, ]
+X_test  <- X_processed[-trainIndex, ]
+y_train <- y_failure_type[trainIndex]
+y_test  <- y_failure_type[-trainIndex]
+
+# Convert data to torch tensors
+X_train_tensor <- torch_tensor(as.matrix(X_train), dtype = torch_float())
+X_test_tensor <- torch_tensor(as.matrix(X_test), dtype = torch_float())
+y_train_tensor <- torch_tensor(as.integer(y_train), dtype = torch_long())
+y_test_tensor <- torch_tensor(as.integer(y_test), dtype = torch_long())
+
+class_counts <- table(y_train)
+total_counts <- sum(class_counts)
+manual_class_weights <- c(1.0, 3.0)  # Adjust these values as needed
+class_weights <- torch_tensor(manual_class_weights, dtype = torch_float())
+
+# Define the neural network class
+Net <- nn_module(
+  initialize = function(input_size, num_classes = 2) {
+    self$fc1 <- nn_linear(input_size, 8)
+    self$relu <- nn_relu()
+    self$fc2 <- nn_linear(8, num_classes)
+  },
+  forward = function(x) {
+    x <- self$fc1(x)
+    x <- self$relu(x)
+    x <- self$fc2(x)
+    x
+  }
+)
+
+
+
 
 ```
 
 ```{r}
+input_size <- ncol(X_train)
+
+# Create an instance of the Net class
+nn_model <- Net(input_size)
+
+# Define a loss function and an optimizer
+criterion <- nn_cross_entropy_loss(weight = class_weights)
+optimizer <- optim_sgd(nn_model$parameters, lr = 0.01)
+
+# Training loop
+num_epochs <- 850000
+for (epoch in 1:num_epochs) {
+  nn_model$train()
+  
+  # Forward pass
+  outputs <- nn_model(X_train_tensor)
+  loss <- criterion(outputs, y_train_tensor)
+  
+  # Backward and optimize
+  optimizer$zero_grad()
+  loss$backward()
+  optimizer$step()
+  
+  if (epoch %% 10000 == 0) {
+    cat(sprintf("Epoch [%d/%d], Loss: %.4f\n", epoch, num_epochs, loss$item()))
+  }
+}
+
+# Evaluation on the test set
+# Evaluation on the test set
+
+
+```
+
+SVM
+
+```{r}
+
+svm_tune_grid=expand.grid(C = 2^(-5:2), sigma = 2^(-5:2))
+svm_model <- train(X_train, y_train, method = 'svmRadial',
+                   trControl = trainControl(method = 'cv', number = 10),
+                   tuneGrid = svm_tune_grid,
+                   tuneLength = 10)
+
+
+svm_predictions <- predict(svm_model, X_test)
 
 ```
 
@@ -617,10 +718,24 @@ results_table |> gt() |>
 
 ```
 
-```{r}
+NNET Eval
 
+```{r}
+nn_model$eval()
+outputs_test <- nn_model(X_test_tensor)
+predicted <- outputs_test$argmax(dim = 2)$sub(1L)  # Adjust predictions to match factor levels (1-based indexing)
+
+predicted <- as.array(predicted)
+predicted <- as.integer(predicted)
+
+# Calculate accuracy and other metrics using confusionMatrix
+nnet_confusion <- confusionMatrix(factor(predicted, levels = levels(y_test)), y_test)
+print(nnet_confusion)
 ```
 
-```{r}
+SVM Eval
 
+```{r}
+confusion_svm <- confusionMatrix(predictions, y_test)
+print(confusion_svm)
 ```
