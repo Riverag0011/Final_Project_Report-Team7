@@ -1,5 +1,5 @@
 ---
-title: "Final Project_Team 7_Gabi"
+title: "Final Project Report Team 7"
 author: "Gabi Rivera Liam Richardson Sahil Wadhwa"
 format: pdf
 editor: visual
@@ -85,7 +85,7 @@ smokedf |>
   ggplot(aes(x = value)) +
   geom_histogram(bins = 20) +
   facet_wrap(~Element, scales = 'free', ncol = 4) +  
-  theme(axis.text.x = element_text(angle = 10)) +
+  theme(axis.text.x = element_text(angle = 0)) +
   labs(title = 'Predictors Distribution', x = NULL, y = "Count")
 ```
 
@@ -96,7 +96,7 @@ smokedf |>
   ggplot(aes(value)) +
   geom_boxplot() +
   facet_wrap(~Element, scales = "free", ncol = 4) +
-  theme(axis.text.x = element_text(angle = 10)) +
+  theme(axis.text.x = element_text(angle = 0)) +
   labs(title = 'Box Plots of Predictors', x = "Count")
 ```
 
@@ -134,12 +134,17 @@ corrplot.mixed(title = "Correlation Plot Between Outcome and Predictors",
 tl.cex = .4, number.cex = 0.6, mar = c(1, 1, 1, 1))
 ```
 
+```{r remove}
+# Remove unnecessary predictors
+smokedf_red <- subset(smokedf, select = c(-hour, -day, -CNT))
+```
+
 ```{r reduced}
 # Remove highly correlated predictors
-correlation_matrix <- cor(smokedf[, -1])
+correlation_matrix <- cor(smokedf_red[, -1])
 highly_correlated <- findCorrelation(correlation_matrix, cutoff = 0.75)
-highly_correlated_names <- colnames(smokedf[, -1])[highly_correlated]
-smokedf_reduced <- smokedf[, -highly_correlated]
+highly_correlated_names <- colnames(smokedf_red[, -1])[highly_correlated]
+smokedf_reduced <- smokedf_red[, -highly_correlated]
 
 # Correlation plot including outcome variable
 smokedf_reduced |> 
@@ -157,7 +162,7 @@ skew_fa <- smokedf_reduced |>
   map_dbl(skewness) |> round(3) 
 
 skew_fa_tibble <- tibble(Variable = names(skew_fa), Skewness = skew_fa)
-skew_fa_tibble |> gt()
+#skew_fa_tibble |> gt()
 
 # Determine zero values in the dataframe
 zero_counts <- sapply(smokedf, function(x) sum(x == 0, na.rm = TRUE))
@@ -187,32 +192,9 @@ bct_analysis <- tibble(
   Lambda = smokedf_reduced |> dplyr::select(-Fire.Alarm) |> 
     map_dbl( ~ bct_test(.x, 'lambda')))
 
-bct_keep <- bct_analysis |>
-  filter(abs(`Original Skew`) > 0.5,
-         abs(`Skew after BoxCox`) < 0.5)
-
+bct_keep <- bct_analysis 
 bct_keep |>
 gt::gt()
-
-# Apply BCT Analysis result in reduced dataframe
-bct <- BoxCoxTrans(smokedf_reduced$CNT + 
-                     ifelse(any(smokedf_reduced$CNT == 0), 0.0001, 0))
-smokedf_reduced$gamma_CNT <- predict(bct, smokedf_reduced$CNT)
-
-# Plot Changes
-smokedf_reduced |> ggplot(aes(x = gamma_CNT)) +
-    geom_histogram(binwidth = 500, fill = "pink", color = "white") +
-    geom_histogram(aes(x = CNT), binwidth = 500, fill = "darkgray", alpha = 10) +
-    labs(title = "Histogram of Box-Cox Transformed gamma with 0")
-
-smokedf_reduced |>
-ggplot(aes(x = gamma_CNT)) +
-geom_histogram(bins= 9, color = "white", fill = "pink") +
-labs(title ="Histogram of Box-Cox Transformed gamma_CNT")
-
-# Remove Original CNT in reduced dataframe
-smokedf_reduced <- smokedf_reduced |> dplyr::select(-CNT) |> 
-  relocate("Fire.Alarm", .after = last_col())
 ```
 
 ## Exploratory Data Analysis
@@ -238,7 +220,7 @@ smokedf_reduced |>
           upper = list(continuous = wrap("cor", size = 2.5)),
           lower = list(continuous = wrap("points", alpha = 0.3), 
                        combo = wrap("box_no_facet", alpha = 0.4)),
-          columns = 1:9, ggplot2::aes(colour = Fire.Alarm)) +
+          columns = 1:8, ggplot2::aes(colour = Fire.Alarm)) +
   theme_grey(base_size = 8) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
         axis.text.y = element_text(size = 8),
@@ -337,6 +319,8 @@ rebalanced |> gt() |>
 
 ## Model Strategies
 
+**Logistic Regression**
+
 ```{r lr}
 set.seed(503)
 ctrl <- trainControl(method = "cv", summaryFunction = twoClassSummary, 
@@ -374,6 +358,8 @@ lrImp <- varImp(lrFit, scale = FALSE)
 plot(lrImp, main = "Variable Importance (Logistic Regression)",
      xlab = "Importance (Std.Dev. of Coefficients)", ylab = "Variables")
 ```
+
+**Penalized Logistic Regression**
 
 ```{r gmb}
 # Create Penalized Logistic Regression
@@ -423,6 +409,8 @@ plot(glmnImp, main = "Variable Importance (Penalized Logistic Regression)",
      xlab = "Importance (Std.Dev. of Coefficients)", ylab = "Variables")
 ```
 
+**Nearest Shrunken Centroids**
+
 ```{r nsc}
 # Create Nearest Shrunken Centroids
 nscGrid <- expand.grid(threshold = seq(0, 25, length = 30))
@@ -458,6 +446,8 @@ plot(nscImp, main = "Variable Importance (Nearest Shrunken Centroids Regression)
      xlab = "Importance (Std.Dev. of Coefficients)", ylab = "Variables")
 ```
 
+**KNN (K Nearest Neighbors)**
+
 ```{r KNN}
 
 set.seed(100)
@@ -471,6 +461,8 @@ plot(knnTune)
 
 ```
 
+**MARS (Multivariate Adaptable Regression Spline)**
+
 ```{r MARS}
 
 set.seed(100)
@@ -479,12 +471,9 @@ marsTune <- train(Fire.Alarm ~ ., data = train_balanced,
                   tuneGrid = expand.grid(degree = 1, nprune = 2:38))
 marsTune
 plot(marsTune)
-
 ```
 
-```{r SVM}
-
-```
+**NN (Neutral Network)**
 
 ```{r NN}
 # X_test <- df <- subset(test_df, select = -c(UTC, CNT, Fire.Alarm))
@@ -535,13 +524,9 @@ Net <- nn_module(
     x
   }
 )
-
-
-
-
 ```
 
-```{r}
+```{r loop}
 input_size <- ncol(X_train)
 
 # Create an instance of the Net class
@@ -572,13 +557,11 @@ for (epoch in 1:num_epochs) {
 
 # Evaluation on the test set
 # Evaluation on the test set
-
-
 ```
 
-SVM
+**SVM (Support Vector Machine)**
 
-```{r}
+```{r svm}
 
 svm_tune_grid=expand.grid(C = 2^(-5:2), sigma = 2^(-5:2))
 svm_model <- train(X_train, y_train, method = 'svmRadial',
@@ -586,12 +569,12 @@ svm_model <- train(X_train, y_train, method = 'svmRadial',
                    tuneGrid = svm_tune_grid,
                    tuneLength = 10)
 
-
 svm_predictions <- predict(svm_model, X_test)
-
 ```
 
 ## Validation and Testing
+
+**Logistic Regression**
 
 ```{r lrII}
 # Predict test data using logistic regression
@@ -608,6 +591,8 @@ lrCM_test <- confusionMatrix(data = as.factor(lr_predictions$Fire.Alarm),
 lrCM_test
 ```
 
+**Penalized Logistic Regression**
+
 ```{r glmnII}
 # Predict test data using penalized logistic regression
 glmn_predictions <- predict(glmnmodel, newdata = test_predictors, type = "raw")
@@ -619,6 +604,8 @@ glmnCM_test <- confusionMatrix(data = as.factor(glmn_predictions$Fire.Alarm),
 glmnCM_test
 ```
 
+**Nearest Shrunken Centroid**
+
 ```{r nscII}
 # Predict test data using nearest shrunken centroid
 nsc_predictions <- predict(nscFit, newdata = test_predictors, type = "raw")
@@ -629,6 +616,8 @@ nscCM_test <- confusionMatrix(data = as.factor(nsc_predictions$Fire.Alarm),
                                reference = test_org$Fire.Alarm, positive = "Yes")
 nscCM_test
 ```
+
+**KNN (K Nearest Neighbors**)
 
 ```{r knn}
 
@@ -647,6 +636,8 @@ cm_knn
 
 ```
 
+**MARS (Multivariate Adaptable Regression Spline)**
+
 ```{r mars}
 
 #Predictors and Confusion Matrix for Mars
@@ -657,18 +648,11 @@ mars_predictions <- data.frame(Fire.Alarm = mars_predictions)
 cm_mars <- confusionMatrix(data = as.factor(mars_predictions$Fire.Alarm),
                                reference = test_org$Fire.Alarm, positive = "Yes")
 cm_mars
-
-```
-
-```{r}
-
-```
-
-```{r}
-
 ```
 
 ## Performance Evaluation
+
+**LR, PLR, and NSC Performance**
 
 ```{r lr glmnet}
 roc_test_lr <- roc(response = as.factor(test_org$Fire.Alarm),
@@ -693,6 +677,8 @@ legend("bottomright", legend = c(paste("LR Model (AUC =", round(auc_test_lr, 2),
 
 ```
 
+**LR, PLR, and NSC Performance Evaluation**
+
 ```{r compare}
 # Model's ROC score
 lrFit_ROC <- round(lrFit$results$ROC,3)
@@ -700,9 +686,9 @@ glmnmodel_ROC <- round(glmnmodel$results$ROC,3)
 nscFit_ROC <- round(nscFit$results$ROC,3)
 
 # Confusion matrix train accuracy score
-lrCM_train_accuracy <- 0.924
-glmnCM_train_accuracy <- 0.926
-nscCM_train_accuracy <- 0.930
+lrCM_train_accuracy <- 0.781
+glmnCM_train_accuracy <- 0.781
+nscCM_train_accuracy <- 0.764
 
 # Confusion matrix test AUC score
 lrCM_AUC <- round(auc(roc_test_lr),3)
@@ -748,21 +734,25 @@ results_table |> gt() |>
              Test_Balanced_Accuracy = "Test Balanced Accuracy")
 ```
 
-```{r knn}
+**KNN Performance Evaluation**
+
+```{r knn eval}
 
 #Accuracy of 0.835
 
 ```
 
-```{r mars}
+**MARS Performance Evaluation**
+
+```{r mars eval}
 
 #Accuracy of 0.757
 
 ```
 
-NNET Eval
+**NNET Performance Evaluation**
 
-```{r}
+```{r nnet eval}
 nn_model$eval()
 outputs_test <- nn_model(X_test_tensor)
 predicted <- outputs_test$argmax(dim = 2)$sub(1L)  # Adjust predictions to match factor levels (1-based indexing)
@@ -775,9 +765,9 @@ nnet_confusion <- confusionMatrix(factor(predicted, levels = levels(y_test)), y_
 print(nnet_confusion)
 ```
 
-SVM Eval
+**SVM Performance Evaluation**
 
-```{r}
+```{r svm eval}
 confusion_svm <- confusionMatrix(predictions, y_test)
 print(confusion_svm)
 ```
