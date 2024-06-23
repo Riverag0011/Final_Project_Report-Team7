@@ -1,0 +1,122 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(caret)
+library(torch)
+
+current_dir <- getwd()
+print(current_dir)
+full_path <- "C:/Users/oliwa/Documents/sf2.csv"
+print(full_path)
+# Load data
+df <- read.csv(full_path)  # Make sure to set the correct path
+y_failure_type <- factor(df$Fire_Alarm)
+# Remove unnecessary columns
+X <- df[, !(names(df) %in% c('UTC', 'Fire_Alarm', 'CNT'))]
+
+if(any(!sapply(X, is.numeric))) {
+  X[] <- lapply(X, function(x) as.numeric(as.factor(x)))
+}
+
+# Standardize numeric features
+preProcValue <- preProcess(X[, c('Temperature_C', 'Humidity.', 'TVOC_ppb', 'eCO2_ppm', 
+                                'Raw_H2', 'Raw_Ethanol', 'Pressure_hPa', 'PM1.0', 'PM2.5', 'NC0.5', 'NC1.0', 'NC2.5')],
+                           method = c("center", "scale"))
+X_processed <- predict(preProcValue, X)
+
+# Splitting the data into training and testing sets
+set.seed(42)
+trainIndex <- createDataPartition(y_failure_type, p = 0.7, list = FALSE)
+X_train <- X_processed[trainIndex, ]
+X_test  <- X_processed[-trainIndex, ]
+y_train <- y_failure_type[trainIndex]
+y_test  <- y_failure_type[-trainIndex]
+
+# Convert data to torch tensors
+X_train_tensor <- torch_tensor(as.matrix(X_train), dtype = torch_float())
+X_test_tensor <- torch_tensor(as.matrix(X_test), dtype = torch_float())
+y_train_tensor <- torch_tensor(as.integer(y_train), dtype = torch_long())
+y_test_tensor <- torch_tensor(as.integer(y_test), dtype = torch_long())
+
+class_counts <- table(y_train)
+total_counts <- sum(class_counts)
+manual_class_weights <- c(1.0, 3.0)  # Adjust these values as needed
+class_weights <- torch_tensor(manual_class_weights, dtype = torch_float())
+
+# Define the neural network class
+Net <- nn_module(
+  initialize = function(input_size, num_classes = 2) {
+    self$fc1 <- nn_linear(input_size, 8)
+    self$relu <- nn_relu()
+    self$fc2 <- nn_linear(8, num_classes)
+  },
+  forward = function(x) {
+    x <- self$fc1(x)
+    x <- self$relu(x)
+    x <- self$fc2(x)
+    x
+  }
+)
+
+# Set the input size based on your data
+
+```
+```{r}
+input_size <- ncol(X_train)
+
+# Create an instance of the Net class
+model <- Net(input_size)
+
+# Define a loss function and an optimizer
+criterion <- nn_cross_entropy_loss(weight = class_weights)
+optimizer <- optim_sgd(model$parameters, lr = 0.01)
+
+# Training loop
+num_epochs <- 850000
+for (epoch in 1:num_epochs) {
+  model$train()
+  
+  # Forward pass
+  outputs <- model(X_train_tensor)
+  loss <- criterion(outputs, y_train_tensor)
+  
+  # Backward and optimize
+  optimizer$zero_grad()
+  loss$backward()
+  optimizer$step()
+  
+  if (epoch %% 10000 == 0) {
+    cat(sprintf("Epoch [%d/%d], Loss: %.4f\n", epoch, num_epochs, loss$item()))
+  }
+}
+
+# Evaluation on the test set
+# Evaluation on the test set
+model$eval()
+outputs_test <- model(X_test_tensor)
+predicted <- outputs_test$argmax(dim = 2)$sub(1L)  # Adjust predictions to match factor levels (1-based indexing)
+
+predicted <- as.array(predicted)
+predicted <- as.integer(predicted)
+
+# Calculate accuracy and other metrics using confusionMatrix
+confusion <- confusionMatrix(factor(predicted, levels = levels(y_test)), y_test)
+print(confusion)
+```
+
+```{r}
+svm_model <- train(X_train, y_train, method = 'svmRadial',
+                   trControl = trainControl(method = 'cv', number = 10),
+                   tuneLength = 10)
+
+# Predictions
+predictions <- predict(svm_model, X_test)
+
+# Confusion matrix
+confusion_svm <- confusionMatrix(predictions, y_test)
+print(confusion)
+```
+
