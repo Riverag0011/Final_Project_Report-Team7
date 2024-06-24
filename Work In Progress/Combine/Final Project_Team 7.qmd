@@ -621,7 +621,7 @@ nscCM_test
 
 ```{r knn}
 
-#Predictors and Confusion Matrix for KNN
+#Predictors for KNN
 
 test_predictors <- smokedf_test_transformed[, -8]
 test_org <- data.frame(Fire.Alarm = smokedf_test_transformed$Fire.Alarm)
@@ -630,24 +630,17 @@ test_org$Fire.Alarm <- factor(test_org$Fire.Alarm)
 knn_predictions <- predict(knnTune, newdata = test_predictors, type = "raw")
 knn_predictions <- data.frame(Fire.Alarm = knn_predictions)
 
-cm_knn <- confusionMatrix(data = as.factor(knn_predictions$Fire.Alarm),
-                               reference = test_org$Fire.Alarm, positive = "Yes")
-cm_knn
-
 ```
 
 **MARS (Multivariate Adaptable Regression Spline)**
 
 ```{r mars}
 
-#Predictors and Confusion Matrix for Mars
+#Predictors for Mars
 
 mars_predictions <- predict(marsTune, newdata = test_predictors, type = "raw")
 mars_predictions <- data.frame(Fire.Alarm = mars_predictions)
 
-cm_mars <- confusionMatrix(data = as.factor(mars_predictions$Fire.Alarm),
-                               reference = test_org$Fire.Alarm, positive = "Yes")
-cm_mars
 ```
 
 ## Performance Evaluation
@@ -738,7 +731,11 @@ results_table |> gt() |>
 
 ```{r knn eval}
 
-#Accuracy of 0.835
+cm_knn <- confusionMatrix(data = as.factor(knn_predictions$Fire.Alarm),
+                               reference = test_org$Fire.Alarm, positive = "Yes")
+cm_knn
+
+#Accuracy of 0.755
 
 ```
 
@@ -746,7 +743,12 @@ results_table |> gt() |>
 
 ```{r mars eval}
 
-#Accuracy of 0.757
+cm_mars <- confusionMatrix(data = as.factor(mars_predictions$Fire.Alarm),
+                               reference = test_org$Fire.Alarm, positive = "Yes")
+
+cm_mars
+
+#Accuracy of 0.674
 
 ```
 
